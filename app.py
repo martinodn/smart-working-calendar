@@ -194,6 +194,21 @@ if check_password():
                 if len(col_values) > 0 and all(val.strip() in target_values for val in col_values):
                     overlap_days.append(col)
             
+            # Manual overlap addition
+            st.write("**Gestione Sovrapposizioni**")
+            manual_overlap_input = st.text_input(
+                "Aggiungi manualmente giorni di sovrapposizione (separati da virgola, es. 5, 12)",
+                help="Inserisci i giorni che vuoi segnalare come sovrapposizione, oltre a quelli rilevati automaticamente."
+            )
+            
+            if manual_overlap_input:
+                manual_days = [d.strip() for d in manual_overlap_input.split(',') if d.strip()]
+                # Merge with automatic, avoiding duplicates
+                # We use a set to avoid duplicates, then convert back to list
+                current_overlaps = set(overlap_days)
+                current_overlaps.update(manual_days)
+                overlap_days = list(current_overlaps)
+            
             if overlap_days:
                 # Try to convert to integers for sorting and clean display (no decimals)
                 try:
