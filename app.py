@@ -42,6 +42,26 @@ def check_password():
 
 import datetime
 
+def format_month_name(ym_str):
+    """Formats 'YYYY-MM' string to 'Month Year' in Italian."""
+    if not ym_str:
+        return ""
+    try:
+        from datetime import datetime
+        month_obj = datetime.strptime(ym_str, "%Y-%m")
+        month_name = month_obj.strftime("%B %Y")
+        month_names_it = {
+            "January": "Gennaio", "February": "Febbraio", "March": "Marzo",
+            "April": "Aprile", "May": "Maggio", "June": "Giugno",
+            "July": "Luglio", "August": "Agosto", "September": "Settembre",
+            "October": "Ottobre", "November": "Novembre", "December": "Dicembre"
+        }
+        for en, it in month_names_it.items():
+            month_name = month_name.replace(en, it)
+        return month_name
+    except:
+        return ym_str
+
 # ... (imports)
 
 if check_password():
@@ -56,7 +76,7 @@ if check_password():
             df = load_data(SHEET_URL)
         
         if df is not None:
-            st.success("Calendario caricato!")
+            st.toast("Calendario caricato!", icon="✅")
             
             # --- Month Filtering Logic ---
             # Assume the column containing 'yyyy-mm' is named 'mese' based on user context.
@@ -88,7 +108,7 @@ if check_password():
                     future_months = available_months
 
                 # Dropdown for selection
-                selected_month = st.selectbox("Seleziona il mese", future_months)
+                selected_month = st.selectbox("Seleziona il mese", future_months, format_func=format_month_name)
                 
                 # Filter DataFrame
                 filtered_df = df[df[month_col] == selected_month]
@@ -186,7 +206,114 @@ if check_password():
                     days_str = ", ".join(sorted(overlap_days))
                 
                 st.warning(f"⚠️ Attenzione! Dog-sitting rahelistico necessario nei giorni: {days_str}.")
+            # --- Smart Working Statistics ---
+            st.subheader("📊 Statistiche Smart Working")
             
+            # Option to choose calculation mode
+            stats_mode = st.radio(
+                "Modalità calcolo", 
+                ["Mese Selezionato", "Intervallo Personalizzato"], 
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+            
+            stats_df_source = None
+            
+            if stats_mode == "Mese Selezionato":
+                stats_df_source = filtered_df
+                current_range_label = f"Mese: {format_month_name(selected_month)}" if month_col else "Tutti i dati"
+            else:
+                # Cumulative mode
+                if month_col:
+                    # Get all available months sorted
+                    all_months = sorted([str(m) for m in df[month_col].unique() if pd.notna(m)])
+                    
+                    if all_months:
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            start_month = st.selectbox("Da", all_months, index=0, format_func=format_month_name)
+                        with c2:
+                            # Default to last month
+                            end_month = st.selectbox("A", all_months, index=len(all_months)-1, format_func=format_month_name)
+                        
+                        if start_month > end_month:
+                            st.error("Il mese di inizio deve essere precedente o uguale al mese di fine.")
+                            stats_df_source = None
+                        else:
+                            # Filter by range
+                            stats_df_source = df[(df[month_col] >= start_month) & (df[month_col] <= end_month)]
+                            current_range_label = f"Intervallo: {format_month_name(start_month)} - {format_month_name(end_month)}"
+                    else:
+                        st.warning("Nessun dato sui mesi trovato.")
+                        stats_df_source = df
+                else:
+                    st.info("Colonna mese non trovata, uso tutti i dati.")
+                    stats_df_source = df
+                    current_range_label = "Tutti i dati"
+
+            if stats_df_source is not None:
+                # Accumulate counts per person
+                person_stats = {}
+                
+                for index, row in stats_df_source.iterrows():
+                    person_name = row.get('persona', f"Persona {index+1}")
+                    
+                    # Get values for this row (excluding metadata columns)
+                    # We re-evaluate columns to exclude for every row to be safe, or just use the list we defined earlier
+                    # But columns_to_color was based on filtered_df which might have different columns if structure varies (unlikely)
+                    # Let's use a robust exclusion list
+                    exclude_cols = ['persona', 'mese', 'data']
+                    if month_col:
+                        exclude_cols.append(month_col)
+                        
+                    person_values = [str(val).strip() for col, val in row.items() 
+                                   if col.lower() not in [c.lower() for c in exclude_cols] and pd.notna(val) and str(val).strip() != ""]
+                    
+                    casa_count = person_values.count("Casa")
+                    ufficio_count = person_values.count("Ufficio")
+                    
+                    if person_name not in person_stats:
+                        person_stats[person_name] = {'casa': 0, 'ufficio': 0}
+                    
+                    person_stats[person_name]['casa'] += casa_count
+                    person_stats[person_name]['ufficio'] += ufficio_count
+                
+                # Build final stats list
+                stats_data = []
+                for person, counts in person_stats.items():
+                    total_relevant = counts['casa'] + counts['ufficio']
+                    if total_relevant > 0:
+                        sw_percentage = (counts['casa'] / total_relevant) * 100
+                    else:
+                        sw_percentage = 0.0
+                        
+                    stats_data.append({
+                        "Persona": person,
+                        "Giorni Casa": counts['casa'],
+                        "Giorni Ufficio": counts['ufficio'],
+                        "% Smart Working": sw_percentage  # Use 0-100 scale
+                    })
+                
+                if stats_data:
+                    stats_df = pd.DataFrame(stats_data)
+                    st.caption(f"Statistiche calcolate su: **{current_range_label}**")
+                    st.dataframe(
+                        stats_df,
+                        width='stretch',
+                        hide_index=True,
+                        column_config={
+                            "% Smart Working": st.column_config.ProgressColumn(
+                                "% Smart Working",
+                                help="Percentuale di giorni in Smart Working (Casa / (Casa + Ufficio))",
+                                format="%.1f%%",
+                                min_value=0,
+                                max_value=100,
+                            )
+                        }
+                    )
+                else:
+                    st.info("Nessun dato rilevante trovato per il calcolo delle statistiche.")
+
             st.divider()
             st.subheader("Invia Calendario")
             
